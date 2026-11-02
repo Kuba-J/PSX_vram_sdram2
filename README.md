@@ -42,7 +42,3 @@ PSX_DualSDRAM.qpf
   entries on the debug page have no effect. Normal video output over HDMI and
   analog is unaffected.
 * **The 480i to 480p hack and the GPU Slowdown option have been removed.**
-
-## License
-
-GPL-2.0, inherited from the upstream core. See [LICENSE](LICENSE).
