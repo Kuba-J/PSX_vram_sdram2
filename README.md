@@ -1,13 +1,14 @@
 # PlayStation MiSTer — GPU VRAM on SDRAM2
 
-A fork of [PSX_MiSTer](https://github.com/MiSTer-devel/PSX_MiSTer) in which the
-GPU keeps its 1 MB of VRAM in a **second SDRAM module** instead of DDR3.
+This is a modified version of the [PSX_MiSTer_core](https://github.com/MiSTer-devel/PSX_MiSTer) that moves the GPU's 1 MB of VRAM from DDR3 to a dedicated second SDRAM module.
 
-Everything else about the core — games, BIOS handling, memory cards, CD formats,
-controllers, savestates — works the same as upstream, so the
-[upstream README](https://github.com/MiSTer-devel/PSX_MiSTer/blob/main/README.md)
-remains the manual for day-to-day use. This page only covers what is specific to
-this edition.
+The goal is to give the GPU its own memory, separate from the rest of the system, while preserving the original PlayStation's GPU timing and behavior.
+
+All other core features, including game compatibility, BIOS support, memory cards, CD image formats, controllers, and save states, remain unchanged.
+
+For general setup and usage instructions, please refer to the official [README](https://github.com/MiSTer-devel/PSX_MiSTer/blob/main/README.md).
+
+This README covers only the differences specific to the SDRAM2 version.
 
 ## Hardware requirements
 
