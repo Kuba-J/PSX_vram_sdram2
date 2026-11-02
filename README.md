@@ -1,4 +1,4 @@
-# PlayStation for MiSTer — SDRAM2 VRAM version
+# PlayStation MiSTer — GPU VRAM on SDRAM2
 
 A fork of [PSX_MiSTer](https://github.com/MiSTer-devel/PSX_MiSTer) in which the
 GPU keeps its 1 MB of VRAM in a **second SDRAM module** instead of DDR3.
