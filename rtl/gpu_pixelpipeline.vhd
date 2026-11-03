@@ -96,8 +96,6 @@ architecture arch of gpu_pixelpipeline is
    type t_filterarray_u20 is array(0 to 3) of unsigned(19 downto 0);
    type t_filterarray_b8  is array(0 to 3) of std_logic_vector(7 downto 0);
    type t_filterarray_b10 is array(0 to 3) of std_logic_vector(9 downto 0);
-   type t_filterarray_uW  is array(0 to 3) of unsigned(2 downto 0);
-   type t_filterarray_bT  is array(0 to 3) of std_logic_vector(17 downto 0);
    type t_filterarray_b16 is array(0 to 3) of std_logic_vector(15 downto 0);
    type t_filterarray_b64 is array(0 to 3) of std_logic_vector(63 downto 0);
    
@@ -111,22 +109,15 @@ architecture arch of gpu_pixelpipeline is
    signal tag_data_1          : t_filterarray_u10;
       
    signal tag_address_a       : unsigned(7 downto 0) := (others => '0');
-   signal tag_data_a          : std_logic_vector(17 downto 0) := (others => '0');
-   signal tagmatch            : std_logic_vector(0 to 3);
-   signal wordSel             : t_filterarray_uW;
-   signal wordSel_1           : t_filterarray_uW;
-   signal tag_rdaddr          : t_filterarray_u8;
-   signal wordSel_h           : t_filterarray_uW;
-   signal tag_data_h          : t_filterarray_u10;
+   signal tag_data_a          : std_logic_vector(9 downto 0) := (others => '0');
    signal tag_wren_a          : std_logic := '0';
-   signal tag_q_b             : t_filterarray_bT;
+   signal tag_q_b             : t_filterarray_b10;
       
    signal tagValid            : std_logic_vector(0 to 255) := (others => '0');
       
-   signal cache_address_a     : unsigned(10 downto 0) := (others => '0');
+   signal cache_address_a     : unsigned(7 downto 0) := (others => '0');
    signal cache_wren_a        : std_logic := '0';
-   type t_filterarray_uA is array(0 to 3) of unsigned(10 downto 0);
-   signal cache_address_b     : t_filterarray_uA;
+   signal cache_address_b     : t_filterarray_u8;
    signal tag_addr_1          : t_filterarray_u8;
    signal cache_q_b           : t_filterarray_b64;
    signal cachehit            : std_logic_vector(0 to 3);
@@ -138,6 +129,20 @@ architecture arch of gpu_pixelpipeline is
    signal CLUTDataB           : t_filterarray_b16;
   
    signal clearCacheBuffer    : std_logic := '0';
+   signal texOrderPending     : std_logic := '0';
+
+   signal l2_row              : unsigned(7 downto 0) := (others => '0');
+   signal l2_word             : unsigned(2 downto 0) := (others => '0');
+   signal l2_tag              : unsigned(5 downto 0) := (others => '0');
+   signal l2_dataaddr         : unsigned(10 downto 0) := (others => '0');
+   signal l2_tag_q            : std_logic_vector(13 downto 0);
+   signal l2_wrtag            : std_logic_vector(13 downto 0) := (others => '0');
+   signal l2_wren             : std_logic;
+   signal l2_data_wren        : std_logic;
+   signal l2_data_q           : std_logic_vector(63 downto 0);
+   signal l2_valid            : std_logic_vector(0 to 255) := (others => '0');
+   signal l2_hit              : std_logic;
+   signal cache_data_a        : std_logic_vector(63 downto 0);
    
    signal textPalReq          : std_logic := '0';
    signal textPalReqX         : unsigned(9 downto 0) := (others => '0');  
@@ -156,6 +161,8 @@ architecture arch of gpu_pixelpipeline is
    (
       IDLE,
       REQUESTMORETEXTURE,
+      L2PROBE,
+      L2CHECK,
       REQUESTTEXTURE,
       WAITTEXTURE,
       TEXTURECOMMIT,
@@ -361,10 +368,10 @@ begin
                                   textPalReq = '0' and textPalInNew = '0' and
                                   clearCachePalette = '0' and state = IDLE) else '0';
 
-   requestVRAMEnable <= '1'         when (state = REQUESTTEXTURE or (state = REQUESTPALETTE and fifoOut_idle = '1')) else '0';
-   requestVRAMXPos   <= reqVRAMXPos when (state = REQUESTTEXTURE or (state = REQUESTPALETTE and fifoOut_idle = '1')) else (others => '0');
-   requestVRAMYPos   <= reqVRAMYPos when (state = REQUESTTEXTURE or (state = REQUESTPALETTE and fifoOut_idle = '1')) else (others => '0');
-   requestVRAMSize   <= reqVRAMSize when (state = REQUESTTEXTURE or (state = REQUESTPALETTE and fifoOut_idle = '1')) else (others => '0');
+   requestVRAMEnable <= '1'         when ((state = REQUESTTEXTURE and texOrderPending = '0') or (state = REQUESTPALETTE and fifoOut_idle = '1')) else '0';
+   requestVRAMXPos   <= reqVRAMXPos when ((state = REQUESTTEXTURE and texOrderPending = '0') or (state = REQUESTPALETTE and fifoOut_idle = '1')) else (others => '0');
+   requestVRAMYPos   <= reqVRAMYPos when ((state = REQUESTTEXTURE and texOrderPending = '0') or (state = REQUESTPALETTE and fifoOut_idle = '1')) else (others => '0');
+   requestVRAMSize   <= reqVRAMSize when ((state = REQUESTTEXTURE and texOrderPending = '0') or (state = REQUESTPALETTE and fifoOut_idle = '1')) else (others => '0');
    
    stage0_u_array(0) <= stage0_u; 
    stage0_u_array(1) <= stage0_u;
@@ -382,7 +389,7 @@ begin
       itagram : entity mem.RamMLAB
       GENERIC MAP 
       (
-         width                               => 18,
+         width                               => 10,
          widthad                             => 8
       )
       PORT MAP (
@@ -390,16 +397,17 @@ begin
          wren       => tag_wren_a,
          data       => tag_data_a,
          wraddress  => std_logic_vector(tag_address_a),
-         rdaddress  => std_logic_vector(tag_rdaddr(i)),
+         rdaddress  => std_logic_vector(tag_addr(i)),
          q          => tag_q_b(i)
       );
       
       -- 64x64 pixel for 4bit mode, 32*64 for 8bit mode, 32*32 for 15 bit mode
-      tag_addr(i)  <= stage0_textaddr(i)(17 downto 11) & stage0_textaddr(i)(6 downto 6);
-      wordSel(i)   <= stage0_textaddr(i)(5 downto 3);
+      tag_addr(i) <= stage0_textaddr(i)(16 downto 11) & stage0_textaddr(i)(4 downto 3) when drawMode(8) = '0' else 
+                  stage0_textaddr(i)(15 downto 11) & stage0_textaddr(i)(5 downto 3);
       
       
-      tag_data(i) <= "000" & drawMode(8) & stage0_textaddr(i)(19 downto 18) & stage0_textaddr(i)(10 downto 7);
+      tag_data(i) <= drawMode(8) & stage0_textaddr(i)(19 downto 17) & stage0_textaddr(i)(10 downto 5) when drawMode(8) = '0' else
+                     drawMode(8) & stage0_textaddr(i)(19 downto 16) & stage0_textaddr(i)(10 downto 6);
       
       stage0_textaddr(i)(19 downto 11) <= drawMode(4) & stage0_v_array(i);
       stage0_textaddr(i)(0)            <= '0';
@@ -408,12 +416,12 @@ begin
                                           (drawMode(3 downto 0) & "000000") + stage0_u_array(i);
       
       icache: entity work.dpram
-      generic map ( addr_width => 11, data_width => 64)
+      generic map ( addr_width => 8, data_width => 64)
       port map
       (
          clock_a     => clk2x,
          address_a   => std_logic_vector(cache_address_a),
-         data_a      => vram_DOUT,
+         data_a      => cache_data_a,
          wren_a      => cache_wren_a,
          
          clock_b     => clk2x,
@@ -424,15 +432,9 @@ begin
          q_b         => cache_q_b(i)
       );
       
-      cache_address_b(i) <= tag_addr_1(i) & wordSel_1(i) when (pipeline_stall = '1')
-                            else tag_addr(i) & wordSel(i);
+      cache_address_b(i) <= tag_addr_1(i) when (pipeline_stall = '1') else tag_addr(i);
    
-      tag_rdaddr(i)      <= tag_addr_1(i) when (state /= IDLE) else tag_addr(i);
-      wordSel_h(i)       <= wordSel_1(i)  when (state /= IDLE) else wordSel(i);
-      tag_data_h(i)      <= tag_data_1(i) when (state /= IDLE) else tag_data(i);
-
-      tagmatch(i)        <= '1' when (unsigned(tag_q_b(i)(9 downto 0)) = tag_data_h(i) and tagValid(to_integer(tag_rdaddr(i))) = '1') else '0';
-      cachehit(i)        <= '1' when (tagmatch(i) = '1' and tag_q_b(i)(10 + to_integer(wordSel_h(i))) = '1') else '0';
+      cachehit(i)        <= '1' when (unsigned(tag_q_b(i)) = tag_data(i) and tagValid(to_integer(tag_addr(i))) = '1') else '0';
    
       stage1_u_mux(i)    <= stage1_u(i)(3 downto 2) when drawMode(8 downto 7) = "00" else
                             stage1_u(i)(2 downto 1) when drawMode(8 downto 7) = "01" else
@@ -483,7 +485,47 @@ begin
           
    end generate;
    
-   cache_wren_a      <= '1' when (vram_DOUT_READY = '1' and state = WAITTEXTURE) else '0';
+   cache_wren_a      <= '1' when ((vram_DOUT_READY = '1' and state = WAITTEXTURE) or
+                                  (state = L2CHECK and l2_hit = '1')) else '0';
+   cache_data_a      <= l2_data_q when (state = L2CHECK) else vram_DOUT;
+
+   itagramL2 : entity mem.RamMLAB
+   GENERIC MAP
+   (
+      width                               => 14,
+      widthad                             => 8
+   )
+   PORT MAP (
+      inclock    => clk2x,
+      wren       => l2_wren,
+      data       => l2_wrtag,
+      wraddress  => std_logic_vector(l2_row),
+      rdaddress  => std_logic_vector(l2_row),
+      q          => l2_tag_q
+   );
+
+   icacheL2: entity work.dpram
+   generic map ( addr_width => 11, data_width => 64)
+   port map
+   (
+      clock_a     => clk2x,
+      address_a   => std_logic_vector(l2_dataaddr),
+      data_a      => vram_DOUT,
+      wren_a      => l2_data_wren,
+
+      clock_b     => clk2x,
+      clken_b     => '1',
+      address_b   => std_logic_vector(l2_dataaddr),
+      data_b      => x"0000000000000000",
+      wren_b      => '0',
+      q_b         => l2_data_q
+   );
+
+   l2_wren           <= '1' when (state = WAITTEXTURE and vram_DOUT_READY = '1') else '0';
+   l2_data_wren      <= '1' when (state = WAITTEXTURE and vram_DOUT_READY = '1') else '0';
+   l2_hit            <= '1' when (l2_tag_q(5 downto 0) = std_logic_vector(l2_tag) and
+                                  l2_valid(to_integer(l2_row)) = '1' and
+                                  l2_tag_q(6 + to_integer(l2_word)) = '1') else '0';
                      
    CLUTwrenA         <= '1' when (vram_DOUT_READY = '1' and state = WAITPALETTE) else '0';
 
@@ -541,12 +583,15 @@ begin
             textureDonePending <= '0';
          end if;
 
-         if (state = WAITTEXTURE and vram_DOUT_READY = '1') then
+         if ((state = WAITTEXTURE and vram_DOUT_READY = '1') or
+             (state = L2CHECK and l2_hit = '1')) then
             tag_wren_a    <= '1';
             tagValid(to_integer(tag_address_a)) <= '1';
          end if;
 
-
+         if (state = WAITTEXTURE and vram_DOUT_READY = '1') then
+            l2_valid(to_integer(l2_row)) <= '1';
+         end if;
 
          if (state = WAITPALETTE) then
             if (vram_DOUT_READY = '1') then
@@ -606,6 +651,7 @@ begin
                   if (gpuLogicCe = '1' and clearCacheBuffer = '1' and pipeline_busy = '0') then
                      clearCacheBuffer <= '0';
                      tagValid         <= (others => '0');
+                     l2_valid         <= (others => '0');
                   end if;
                   if (gpuLogicCe = '1' and textPalReq = '1' and pipeline_busy = '0') then
                      textPalReq     <= '0';
@@ -633,25 +679,23 @@ begin
                      state        <= REQUESTMORETEXTURE;
                      cacherequest <= not cachehit;
                   elsif (stage0_valid = '1' and stage0_texture = '1' and cachehit(0) = '0') then
-                     state           <= REQUESTTEXTURE;
+                     state           <= L2PROBE;
                      cacherequest    <= (others => '0');
-                     if (tagmatch(0) = '1') then
-                        tag_data_a(17 downto 10) <= tag_q_b(0)(17 downto 10);
-                     else
-                        tag_data_a(17 downto 10) <= (others => '0');
-                     end if;
-                     tag_data_a(10 + to_integer(wordSel(0))) <= '1';
-                     tag_data_a(9 downto 0) <= std_logic_vector(tag_data(0));
+                     tag_data_a      <= std_logic_vector(tag_data(0));
                      tag_address_a   <= tag_addr(0);
-                     cache_address_a <= tag_addr(0) & wordSel(0);
-                     
+                     cache_address_a <= tag_addr(0);
+                     l2_row      <= stage0_textaddr(0)(17 downto 11) & stage0_textaddr(0)(6 downto 6);
+                     l2_word     <= stage0_textaddr(0)(5 downto 3);
+                     l2_tag      <= stage0_textaddr(0)(19 downto 18) & stage0_textaddr(0)(10 downto 7);
+                     l2_dataaddr <= stage0_textaddr(0)(17 downto 11) & stage0_textaddr(0)(6 downto 6) & stage0_textaddr(0)(5 downto 3);
+
                      reqVRAMXPos <= stage0_textaddr(0)(10 downto 1);
                      reqVRAMYPos <= stage0_textaddr(0)(19 downto 11);
                      reqVRAMSize <= to_unsigned(1, 11);
                   end if;
                
                when REQUESTMORETEXTURE =>
-                  state           <= REQUESTTEXTURE;
+                  state           <= L2PROBE;
                   selectIndex := 0;
                   for i in 1 to 3 loop
                      if (cacherequest(i) = '1') then
@@ -659,26 +703,45 @@ begin
                      end if;
                   end loop;
 
-                  if (tagmatch(selectIndex) = '1') then
-                     tag_data_a(17 downto 10) <= tag_q_b(selectIndex)(17 downto 10);
-                  else
-                     tag_data_a(17 downto 10) <= (others => '0');
-                  end if;
-                  tag_data_a(10 + to_integer(wordSel_1(selectIndex))) <= '1';
-                  tag_data_a(9 downto 0) <= std_logic_vector(tag_data_1(selectIndex));
+                  tag_data_a      <= std_logic_vector(tag_data_1(selectIndex));
                   tag_address_a   <= tag_addr_1(selectIndex);
-                  cache_address_a <= tag_addr_1(selectIndex) & wordSel_1(selectIndex);
+                  cache_address_a <= tag_addr_1(selectIndex);
+                  l2_row      <= stage0_textaddr_1(selectIndex)(17 downto 11) & stage0_textaddr_1(selectIndex)(6 downto 6);
+                  l2_word     <= stage0_textaddr_1(selectIndex)(5 downto 3);
+                  l2_tag      <= stage0_textaddr_1(selectIndex)(19 downto 18) & stage0_textaddr_1(selectIndex)(10 downto 7);
+                  l2_dataaddr <= stage0_textaddr_1(selectIndex)(17 downto 11) & stage0_textaddr_1(selectIndex)(6 downto 6) & stage0_textaddr_1(selectIndex)(5 downto 3);
 
                   reqVRAMXPos <= stage0_textaddr_1(selectIndex)(10 downto 1);
                   reqVRAMYPos <= stage0_textaddr_1(selectIndex)(19 downto 11);
                   reqVRAMSize <= to_unsigned(1, 11);
 
+               when L2PROBE =>
+                  state <= L2CHECK;
+
+               when L2CHECK =>
+                  if (l2_hit = '1') then
+                     state <= TEXTURECOMMIT;
+                     for i in 0 to 3 loop
+                        if tag_address_a = tag_addr_1(i) then
+                           cacherequest(i) <= '0';
+                        end if;
+                     end loop;
+                  else
+                     state <= REQUESTTEXTURE;
+                     if (l2_tag_q(5 downto 0) = std_logic_vector(l2_tag) and l2_valid(to_integer(l2_row)) = '1') then
+                        l2_wrtag(13 downto 6) <= l2_tag_q(13 downto 6);
+                     else
+                        l2_wrtag(13 downto 6) <= (others => '0');
+                     end if;
+                     l2_wrtag(6 + to_integer(l2_word)) <= '1';
+                     l2_wrtag(5 downto 0) <= std_logic_vector(l2_tag);
+                  end if;
+
                when REQUESTTEXTURE =>
-                  if requestVRAMIdle = '1' then
+                  if (requestVRAMIdle = '1' and texOrderPending = '0') then
                      state <= WAITTEXTURE;
                      for i in 0 to 3 loop
-                        if cache_address_a = (tag_addr_1(i) & wordSel_1(i)) and
-                           tag_data_a(9 downto 0) = std_logic_vector(tag_data_1(i)) then
+                        if tag_address_a = tag_addr_1(i) then
                            cacherequest(i) <= '0';
                         end if;
                      end loop;
@@ -736,6 +799,12 @@ begin
             end if;
             
             -- clear cache request
+            if (fifoOut_idle = '1') then
+               texOrderPending <= '0';
+            end if;
+            if (clearCacheTexture = '1') then
+               texOrderPending <= '1';
+            end if;
             if (clearCacheTexture = '1') then
                clearCacheBuffer <= '1';
             end if;
@@ -849,7 +918,6 @@ begin
                for i in 0 to 3 loop
                   stage1_u(i)          <= stage0_u_array(i);
                   tag_addr_1(i)        <= tag_addr(i);
-                  wordSel_1(i)         <= wordSel(i);
                   tag_data_1(i)        <= tag_data(i);
                   stage0_textaddr_1(i) <= stage0_textaddr(i);
                end loop;
