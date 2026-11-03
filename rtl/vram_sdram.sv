@@ -643,6 +643,13 @@ always @(posedge clk_gpu) begin
 end
 
 wire [CF_W-1:0] cf_head = cf_mem[cf_rbin[CF_AW-1:0]];
+
+reg [CF_W-1:0] cmd_q = {CF_W{1'b0}};
+reg            cmd_v = 1'b0;
+wire           ram_busy;
+wire           cmd_free = !cmd_v || !ram_busy;
+wire           cf_pop   = cmd_free && !cf_empty;
+
 wire        ram_we;
 wire        ram_rd;
 wire [21:0] ram_wa;
@@ -650,11 +657,10 @@ wire [63:0] ram_din;
 wire  [7:0] ram_be;
 wire  [7:0] ram_burst;
 assign {ram_we, ram_rd, ram_wa, ram_din, ram_be, ram_burst} =
-       cf_empty ? {CF_W{1'b0}} : cf_head;
+       cmd_v ? cmd_q : {CF_W{1'b0}};
 
 wire [63:0] ram_dout;
 wire        ram_dout_ready;
-wire        ram_busy;
 
 always @(posedge clk_ram) begin
    if (init) begin
@@ -662,11 +668,15 @@ always @(posedge clk_ram) begin
       cf_rgray    <= 0;
       cf_wgray_s1 <= 0;
       cf_wgray_s2 <= 0;
+      cmd_v       <= 1'b0;
    end else begin
       cf_wgray_s1 <= cf_wgray;
       cf_wgray_s2 <= cf_wgray_s1;
 
-      if (!cf_empty && !ram_busy) begin
+      if (cmd_v && !ram_busy) cmd_v <= 1'b0;
+      if (cf_pop) begin
+         cmd_q    <= cf_head;
+         cmd_v    <= 1'b1;
          cf_rbin  <= cf_rbin_next;
          cf_rgray <= cf_rgray_next;
       end
