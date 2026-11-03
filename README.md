@@ -15,8 +15,7 @@ This README covers only the differences specific to the SDRAM2 version.
 * MiSTer with the usual SDRAM module for main RAM.
 * **A second SDRAM module of any size is required.**
 
-VRAM has no DDR3 path here, so the second module is not optional. A build without
-it stops in the fitter instead of producing a core that cannot display anything.
+VRAM has no DDR3 path here, so the second module is not optional.
 
 ## Installing
 
