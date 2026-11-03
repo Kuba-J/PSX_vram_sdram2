@@ -130,6 +130,8 @@ architecture arch of gpu_pixelpipeline is
   
    signal clearCacheBuffer    : std_logic := '0';
    signal texOrderPending     : std_logic := '0';
+   signal l2_sel              : integer range 0 to 3;
+   signal l2_rdaddr           : unsigned(10 downto 0);
 
    signal l2_row              : unsigned(7 downto 0) := (others => '0');
    signal l2_word             : unsigned(2 downto 0) := (others => '0');
@@ -161,7 +163,6 @@ architecture arch of gpu_pixelpipeline is
    (
       IDLE,
       REQUESTMORETEXTURE,
-      L2PROBE,
       L2CHECK,
       REQUESTTEXTURE,
       WAITTEXTURE,
@@ -515,11 +516,21 @@ begin
 
       clock_b     => clk2x,
       clken_b     => '1',
-      address_b   => std_logic_vector(l2_dataaddr),
+      address_b   => std_logic_vector(l2_rdaddr),
       data_b      => x"0000000000000000",
       wren_b      => '0',
       q_b         => l2_data_q
    );
+
+   l2_sel            <= 3 when (cacherequest(3) = '1') else
+                        2 when (cacherequest(2) = '1') else
+                        1 when (cacherequest(1) = '1') else 0;
+
+   l2_rdaddr         <= (stage0_textaddr(0)(17 downto 11) & stage0_textaddr(0)(6 downto 6) & stage0_textaddr(0)(5 downto 3))
+                           when (state = IDLE) else
+                        (stage0_textaddr_1(l2_sel)(17 downto 11) & stage0_textaddr_1(l2_sel)(6 downto 6) & stage0_textaddr_1(l2_sel)(5 downto 3))
+                           when (state = REQUESTMORETEXTURE) else
+                        l2_dataaddr;
 
    l2_wren           <= '1' when (state = WAITTEXTURE and vram_DOUT_READY = '1') else '0';
    l2_data_wren      <= '1' when (state = WAITTEXTURE and vram_DOUT_READY = '1') else '0';
@@ -679,7 +690,7 @@ begin
                      state        <= REQUESTMORETEXTURE;
                      cacherequest <= not cachehit;
                   elsif (stage0_valid = '1' and stage0_texture = '1' and cachehit(0) = '0') then
-                     state           <= L2PROBE;
+                     state           <= L2CHECK;
                      cacherequest    <= (others => '0');
                      tag_data_a      <= std_logic_vector(tag_data(0));
                      tag_address_a   <= tag_addr(0);
@@ -695,13 +706,8 @@ begin
                   end if;
                
                when REQUESTMORETEXTURE =>
-                  state           <= L2PROBE;
-                  selectIndex := 0;
-                  for i in 1 to 3 loop
-                     if (cacherequest(i) = '1') then
-                        selectIndex := i;
-                     end if;
-                  end loop;
+                  state           <= L2CHECK;
+                  selectIndex := l2_sel;
 
                   tag_data_a      <= std_logic_vector(tag_data_1(selectIndex));
                   tag_address_a   <= tag_addr_1(selectIndex);
@@ -714,9 +720,6 @@ begin
                   reqVRAMXPos <= stage0_textaddr_1(selectIndex)(10 downto 1);
                   reqVRAMYPos <= stage0_textaddr_1(selectIndex)(19 downto 11);
                   reqVRAMSize <= to_unsigned(1, 11);
-
-               when L2PROBE =>
-                  state <= L2CHECK;
 
                when L2CHECK =>
                   if (l2_hit = '1') then

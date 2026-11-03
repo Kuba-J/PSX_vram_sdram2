@@ -608,14 +608,14 @@ reg [CF_W-1:0] cf_mem [0:(1<<CF_AW)-1];
 reg [CF_AW:0] cf_wbin = 0, cf_wgray = 0;
 reg [CF_AW:0] cf_rbin = 0, cf_rgray = 0;
 reg [CF_AW:0] cf_rgray_s1 = 0, cf_rgray_s2 = 0;
-reg [CF_AW:0] cf_wgray_s1 = 0, cf_wgray_s2 = 0;
+reg [CF_AW:0] cf_wgray_s1 = 0;
 
 wire [CF_AW:0] cf_wbin_next  = cf_wbin + 1'b1;
 wire [CF_AW:0] cf_wgray_next = (cf_wbin_next >> 1) ^ cf_wbin_next;
 wire [CF_AW:0] cf_rbin_next  = cf_rbin + 1'b1;
 wire [CF_AW:0] cf_rgray_next = (cf_rbin_next >> 1) ^ cf_rbin_next;
 wire cf_full  = (cf_wgray_next == {~cf_rgray_s2[CF_AW:CF_AW-1], cf_rgray_s2[CF_AW-2:0]});
-wire cf_empty = (cf_rgray == cf_wgray_s2);
+wire cf_empty = (cf_rgray == cf_wgray_s1);
 
 wire gpu_req = vram_RD || vram_WE;
 
@@ -667,11 +667,9 @@ always @(posedge clk_ram) begin
       cf_rbin     <= 0;
       cf_rgray    <= 0;
       cf_wgray_s1 <= 0;
-      cf_wgray_s2 <= 0;
       cmd_v       <= 1'b0;
    end else begin
       cf_wgray_s1 <= cf_wgray;
-      cf_wgray_s2 <= cf_wgray_s1;
 
       if (cmd_v && !ram_busy) cmd_v <= 1'b0;
       if (cf_pop) begin
@@ -687,14 +685,14 @@ localparam integer RF_AW = 2;
 reg [63:0] rf_mem [0:(1<<RF_AW)-1];
 reg [RF_AW:0] rf_wbin = 0, rf_wgray = 0;
 reg [RF_AW:0] rf_rbin = 0, rf_rgray = 0;
-reg [RF_AW:0] rf_rgray_s1 = 0, rf_rgray_s2 = 0;
+reg [RF_AW:0] rf_rgray_s1 = 0;
 reg [RF_AW:0] rf_wgray_s1 = 0, rf_wgray_s2 = 0;
 
 wire [RF_AW:0] rf_wbin_next  = rf_wbin + 1'b1;
 wire [RF_AW:0] rf_wgray_next = (rf_wbin_next >> 1) ^ rf_wbin_next;
 wire [RF_AW:0] rf_rbin_next  = rf_rbin + 1'b1;
 wire [RF_AW:0] rf_rgray_next = (rf_rbin_next >> 1) ^ rf_rbin_next;
-wire rf_full  = (rf_wgray_next == {~rf_rgray_s2[RF_AW:RF_AW-1], rf_rgray_s2[RF_AW-2:0]});
+wire rf_full  = (rf_wgray_next == {~rf_rgray_s1[RF_AW:RF_AW-1], rf_rgray_s1[RF_AW-2:0]});
 wire rf_empty = (rf_rgray == rf_wgray_s2);
 
 always @(posedge clk_ram) begin
@@ -702,10 +700,8 @@ always @(posedge clk_ram) begin
       rf_wbin      <= 0;
       rf_wgray     <= 0;
       rf_rgray_s1  <= 0;
-      rf_rgray_s2  <= 0;
    end else begin
       rf_rgray_s1 <= rf_rgray;
-      rf_rgray_s2 <= rf_rgray_s1;
       if (ram_dout_ready) begin
          if (!rf_full) begin
             rf_mem[rf_wbin[RF_AW-1:0]] <= ram_dout;
