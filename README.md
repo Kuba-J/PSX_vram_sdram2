@@ -1,3 +1,7 @@
+Special version of the MiSTer PSX core for DualSDRAM
+
+Experimental build only. Don't report bugs.
+
 # PSX MiSTer — GPU VRAM on SDRAM2
 
 This is a modified version of the [PSX_MiSTer_core](https://github.com/MiSTer-devel/PSX_MiSTer) that moves the GPU's 1 MB of VRAM from DDR3 to a dedicated second SDRAM module.
