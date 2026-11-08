@@ -79,6 +79,7 @@ entity gpu is
       
       dmaOn                : in  std_logic;
       gpu_dmaRequest       : out std_logic;
+      gpu_dmaDrawActive    : out std_logic;
       DMA_GPU_waiting      : in  std_logic;
       DMA_GPU_resumeCpuOwn : in  std_logic;
       DMA_GPU_writeEna     : in  std_logic;
@@ -247,6 +248,10 @@ architecture arch of gpu is
    signal GPUSTAT_ReadyRecDMA       : std_logic;
    signal ReadyRecDMA_full          : std_logic;
    signal ReadyRecDMA_xfer          : std_logic;
+   signal gpuGp0DreqStagedEmpty     : std_logic;
+   signal gpuGp0DreqStagedMultiple  : std_logic;
+   signal gpuGp0DreqQueueReady      : std_logic;
+   signal gpuGp0DreqReady           : std_logic := '0';
    signal ReadyRecDMA_bit28         : std_logic;
    signal dmaReqInternal            : std_logic;
    signal GPUSTAT_WFEPBlocked        : std_logic := '0';
@@ -283,6 +288,7 @@ architecture arch of gpu is
    signal fifoIn_Empty              : std_logic;
    signal fifoIn_Full               : std_logic;
    signal fifoIn_FullLogical        : std_logic;
+   signal fifoIn_AtMostOne          : std_logic;
    signal fifoIn_Overflow           : std_logic := '0';
    signal fifoIn_CPUThrottle        : std_logic;
    signal busReadStall              : std_logic := '0';
@@ -760,13 +766,10 @@ begin
    export_gpus <= unsigned(GPUSTAT);
 -- synthesis translate_on
 
+   gpu_dmaDrawActive <= not proc_idle;
+
    gpu_dmaRequest <= (dmaReqInternal and (not vram2cpu_Fifo_Empty)) when GPUSTAT_DMADirection = "11" else
-                     (dmaReqInternal or
-                      ((not proc_idle) and (poly_requestFifo or line_requestFifo or rect_requestFifo) and
-                       fifoIn_Empty and (not gp0HeaderPending) and
-                       (not fifoIn_ParamFetching) and (not fifoIn_ParamReady) and
-                       (not fifoIn_StreamValid) and
-                       ((not proc_CmdDone) or proc_done))) when GPUSTAT_DMADirection = "10" else
+                     gpuGp0DreqReady when GPUSTAT_DMADirection = "10" else
                      dmaReqInternal;
 
    GPUSTAT(3 downto 0)     <= GPUSTAT_TextPageX;
@@ -797,7 +800,7 @@ begin
 
    GPUSTAT_DMADataRequest <= '0' when (GPUSTAT_DMADirection = "00") else
                              not fifoIn_FullLogical when (GPUSTAT_DMADirection = "01") else
-                             ReadyRecDMA_xfer when (GPUSTAT_DMADirection = "10") else
+                             gpuGp0DreqReady when (GPUSTAT_DMADirection = "10") else
                              GPUSTAT_ReadySendVRAM;
 
    dmaReqInternal         <= '0' when (GPUSTAT_DMADirection = "00") else
@@ -816,6 +819,28 @@ begin
                            (not fifoIn_StreamValid) and
                            (not WFEPTransfer) and
                            ((not proc_CmdDone) or proc_done);
+
+   gpuGp0DreqStagedEmpty <= not (gp0HeaderPending or fifoIn_ParamFetching or
+                                 fifoIn_ParamReady or fifoIn_StreamValid);
+   gpuGp0DreqStagedMultiple <=
+       (gp0HeaderPending and (fifoIn_ParamFetching or fifoIn_ParamReady or fifoIn_StreamValid)) or
+       (fifoIn_ParamFetching and (fifoIn_ParamReady or fifoIn_StreamValid)) or
+       (fifoIn_ParamReady and fifoIn_StreamValid);
+
+   gpuGp0DreqQueueReady <= '1' when
+       (fifoIn_Empty = '1' and gpuGp0DreqStagedMultiple = '0') or
+       (fifoIn_AtMostOne = '1' and gpuGp0DreqStagedEmpty = '1') else '0';
+
+   process(clk2x)
+   begin
+      if rising_edge(clk2x) then
+         if reset = '1' or softReset = '1' or SS_reset = '1' or fifoIn_reset = '1' then
+            gpuGp0DreqReady <= '0';
+         elsif ce = '1' then
+            gpuGp0DreqReady <= gpuGp0DreqQueueReady;
+         end if;
+      end if;
+   end process;
 
    GPUSTAT_ReadyRecDMA <= ReadyRecDMA_full;
    ReadyRecDMA_bit28   <= ReadyRecDMA_xfer;
@@ -1048,6 +1073,7 @@ begin
       Wr          => fifoIn_Wr,
       Full        => fifoIn_Full,
       FullLogical => fifoIn_FullLogical,
+      AtMostOne   => fifoIn_AtMostOne,
       CPUThrottle => fifoIn_CPUThrottle,
       Dout        => fifoIn_RawDout,
       Rd          => fifoIn_Rd,

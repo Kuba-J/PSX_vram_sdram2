@@ -22,6 +22,7 @@ entity gpu_fifo16 is
       Wr          : in  std_logic;
       Full        : out std_logic;
       FullLogical : out std_logic;
+      AtMostOne   : out std_logic;
       CPUThrottle : out std_logic;
       Dout        : out std_logic_vector(31 downto 0);
       Rd          : in  std_logic;
@@ -49,6 +50,7 @@ architecture arch of gpu_fifo16 is
 begin
    Full        <= '1' when count = to_unsigned(SIZE, count'length) else '0';
    FullLogical <= '1' when count >= to_unsigned(LOGICAL_FULL, count'length) else '0';
+   AtMostOne   <= '1' when count <= to_unsigned(1, count'length) else '0';
    Empty       <= '1' when count = 0 else '0';
 
    CPUThrottle <= '1' when count >= to_unsigned(SIZE-4, count'length) else '0';
@@ -68,14 +70,24 @@ begin
 
             if do_write then
                memory(to_integer(wrptr)) <= Din;
-               if wrptr = to_unsigned(SIZE-1, AW) then wrptr <= (others => '0');
-               else wrptr <= wrptr + 1; end if;
+               if SIZE = 2 ** AW then
+                  wrptr <= wrptr + 1;
+               elsif wrptr = to_unsigned(SIZE-1, AW) then
+                  wrptr <= (others => '0');
+               else
+                  wrptr <= wrptr + 1;
+               end if;
             end if;
 
             if do_read then
                Dout <= memory(to_integer(rdptr));
-               if rdptr = to_unsigned(SIZE-1, AW) then rdptr <= (others => '0');
-               else rdptr <= rdptr + 1; end if;
+               if SIZE = 2 ** AW then
+                  rdptr <= rdptr + 1;
+               elsif rdptr = to_unsigned(SIZE-1, AW) then
+                  rdptr <= (others => '0');
+               else
+                  rdptr <= rdptr + 1;
+               end if;
             end if;
 
             if do_write and not do_read then

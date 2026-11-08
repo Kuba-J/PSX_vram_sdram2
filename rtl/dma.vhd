@@ -48,6 +48,7 @@ entity dma is
       dma_cache_write      : out std_logic;
       
       gpu_dmaRequest       : in  std_logic;
+      gpu_dmaDrawActive    : in  std_logic;
       DMA_GPU_waiting      : out std_logic := '0';
       DMA_GPU_resumeCpuOwn : out std_logic := '0';
       DMA_GPU_writeEna     : out std_logic := '0';
@@ -100,6 +101,7 @@ architecture arch of dma is
       OFF,
       STARTING,
       READHEADER,
+      CHAINNEXT,
       LL_END_COMMIT,
       LL_END_RETIRE,
       SLOWDOWN,
@@ -149,6 +151,10 @@ architecture arch of dma is
    signal toDevice            : std_logic;
    signal directionNeg        : std_logic;
    signal nextAddr            : std_logic_vector(23 downto 0);
+   signal linkedNodeSingle    : std_logic := '0';
+   signal gpuDrawMeta         : std_logic := '0';
+   signal gpuDrawSync         : std_logic := '0';
+   signal linkedExtraWords    : integer range 0 to 3 := 0;
    signal blocksleft          : unsigned(15 downto 0);
          
    signal chopsize            : unsigned(7 downto 0);
@@ -228,11 +234,9 @@ begin
                         '0';
 
    DMA_GPU_resumeCpuOwn <= '1' when (
-      not (dmaOn = '1' and activeChannel = 2) and
+      dmaOn = '0' and cpuPaused = '0' and
       DPCR(11) = '1' and dmaArray(2).D_CHCR(24) = '1' and
-      dmaArray(2).channelOn = '1' and dmaState = OFF and
-      dmaArray(2).chopwaiting = '0' and gpu_dmaRequest = '1' and
-      cpuPaused = '0' and
+      dmaArray(2).channelOn = '1' and
       dmaArray(2).D_CHCR(10 downto 9) = "10") else '0';
                         
    DMA_GPU_readEna   <= '1' when (dmaState = WORKING and fifoOut_NearFull = '0' and activeChannel = 2 and toDevice = '0') else '0';
@@ -276,7 +280,10 @@ begin
       variable addtime         : integer range 0 to 511;
    begin
       if rising_edge(clk1x) then
-      
+
+         gpuDrawMeta <= gpu_dmaDrawActive;
+         gpuDrawSync <= gpuDrawMeta;
+
          fifoIn_reset  <= '0';
          fifoOut_reset <= '0';
          
@@ -327,6 +334,8 @@ begin
             end if;
             
             dmaState       <= OFF;
+            gpuDrawMeta    <= '0';
+            gpuDrawSync    <= '0';
             autoread       <= '0';
             fifoIn_reset   <= '1';
             fifoOut_reset  <= '1';
@@ -685,6 +694,11 @@ begin
                when READHEADER =>
                   if (dma_wr = '1') then
                      nextAddr  <= dma_data(23 downto 0);
+                     if (dma_data(31 downto 24) = x"01") then
+                        linkedNodeSingle <= '1';
+                     else
+                        linkedNodeSingle <= '0';
+                     end if;
                      if (unsigned(dma_data(31 downto 24)) > 0) then
                         dmaSettings.D_MADR <= dmaSettings.D_MADR + 4;
                         dmaState           <= WORKING; 
@@ -711,6 +725,25 @@ begin
                         dmaArray(activeChannel).chopwaiting   <= '1';
                         dmaArray(activeChannel).chopwaitcount <= x"03";
                      end if;
+                  end if;
+
+               when CHAINNEXT =>
+                  autoread <= '0';
+                  ram_ena <= '0';
+                  if (linkedExtraWords > 0) then
+                     if (dma_wr = '1') then
+                        linkedExtraWords <= linkedExtraWords - 1;
+                     end if;
+                  elsif (dmaArray(2).D_CHCR(24) = '0') then
+                     dmaState <= PAUSING;
+                     paused <= '1';
+                     dmaArray(activeChannel).chopwaiting <= '0';
+                  else
+                     dmaState <= READHEADER;
+                     requestedDwords <= 0;
+                     requiredDwords <= 1;
+                     ram_Adr <= nextAddr(22 downto 2) & "00";
+                     ram_ena <= '1';
                   end if;
 
                when LL_END_COMMIT =>
@@ -889,6 +922,20 @@ begin
                               if (nextAddr(23) = '1') then
                                  checkIRQ := '1';
                                  dmaState <= STOPPING;
+                              elsif (activeChannel = 2 and toDevice = '1' and
+                                     linkedNodeSingle = '1' and gpu_dmaRequest = '1' and
+                                     gpuDrawSync = '1' and
+                                     dmaArray(2).D_CHCR(24) = '1' and
+                                     requestedDwords <= 5) then
+                                 dmaState <= CHAINNEXT;
+                                 autoread <= '0';
+                                 ram_ena <= '0';
+                                 case to_unsigned(requestedDwords, 3) is
+                                    when "011" => linkedExtraWords <= 1;
+                                    when "100" => linkedExtraWords <= 2;
+                                    when "101" => linkedExtraWords <= 3;
+                                    when others => linkedExtraWords <= 0;
+                                 end case;
                               else
                                  dmaState <= PAUSING;
                                  paused   <= '1';
