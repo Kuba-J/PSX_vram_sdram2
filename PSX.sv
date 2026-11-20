@@ -251,10 +251,12 @@ parameter CONF_STR = {
 	"P1O[73],Dither 24 Bit for VGA,Off,On;",
 	"P1-;",
 	"P1O[54:53],Widescreen Hack,Off,3:2,5:3,16:9;",
+`ifdef PSX_ENABLE_TEXTURE_FILTER
 	"P1O[82:81],Texture Filter,Off,All Polygon,Dithered,Dith+Shaded;",
 	"hDP1O[87:86],Filter Strength,25%,50%,75%,100%;",
 	"hDP1O[83],Filter 2D Detect,Off,On;",
 	"P1-;",
+`endif
 	"P1O[8:7],Stereo Mix,None,25%,50%,100%;",
 
 	"P2,Miscellaneous;",
@@ -935,9 +937,16 @@ psx
    .LBAOn(status[69]),
    .PATCHSERIAL(0), //.PATCHSERIAL(status[54]),
    .noTexture(status[27]),
+`ifdef PSX_ENABLE_TEXTURE_FILTER
    .textureFilter(status[82:81]),
    .textureFilterStrength(status[87:86]),
    .textureFilter2DOff(status[83]),
+`else
+   // Synthesis removes the unused four-tap filtering and extra cache paths.
+   .textureFilter(2'b00),
+   .textureFilterStrength(2'b00),
+   .textureFilter2DOff(1'b0),
+`endif
    .dither24(status[73]),
    .render24(status[84]),
    .syncVideoOut(syncVideoOut),
