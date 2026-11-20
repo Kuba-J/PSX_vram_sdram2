@@ -301,6 +301,11 @@ architecture arch of gpu is
    signal proc_done                 : std_logic;
    signal proc_CmdDone              : std_logic;
    signal proc_requestFifo          : std_logic;
+   signal fifoIn_lastWrClass        : std_logic_vector(2 downto 0) := "000";
+   signal proc_cmdClass             : std_logic_vector(2 downto 0) := "000";
+   signal cmdQueued_dreqHold        : std_logic;
+   signal cmdHeader_dreqHold        : std_logic;
+   signal cmdDreqHold               : std_logic;
    signal cpu2vram_streamFifo       : std_logic;
    signal timeout                   : integer range 0 to 67108863 := 0;
    
@@ -770,7 +775,7 @@ begin
    gpu_dmaDrawActive <= not proc_idle;
 
    gpu_dmaRequest <= (dmaReqInternal and (not vram2cpu_Fifo_Empty)) when GPUSTAT_DMADirection = "11" else
-                     gpuGp0DreqReady when GPUSTAT_DMADirection = "10" else
+                     (gpuGp0DreqReady and not cmdDreqHold) when GPUSTAT_DMADirection = "10" else
                      dmaReqInternal;
 
    GPUSTAT(3 downto 0)     <= GPUSTAT_TextPageX;
@@ -801,7 +806,7 @@ begin
 
    GPUSTAT_DMADataRequest <= '0' when (GPUSTAT_DMADirection = "00") else
                              not fifoIn_FullLogical when (GPUSTAT_DMADirection = "01") else
-                             gpuGp0DreqReady when (GPUSTAT_DMADirection = "10") else
+                             (gpuGp0DreqReady and not cmdDreqHold) when (GPUSTAT_DMADirection = "10") else
                              GPUSTAT_ReadySendVRAM;
 
    dmaReqInternal         <= '0' when (GPUSTAT_DMADirection = "00") else
@@ -813,12 +818,14 @@ begin
                            (not fifoIn_ParamFetching) and (not fifoIn_ParamReady) and
                            (not fifoIn_StreamValid) and
                            (not GPUSTAT_WFEPBlocked) and
+                           (not cmdDreqHold) and
                            ((not proc_CmdDone) or proc_done);
 
    ReadyRecDMA_xfer <= fifoIn_Empty and (not gp0HeaderPending) and
                            (not fifoIn_ParamFetching) and (not fifoIn_ParamReady) and
                            (not fifoIn_StreamValid) and
                            (not WFEPTransfer) and
+                           (not cmdDreqHold) and
                            ((not proc_CmdDone) or proc_done);
 
    gpuGp0DreqStagedEmpty <= not (gp0HeaderPending or fifoIn_ParamFetching or
@@ -832,13 +839,44 @@ begin
        (fifoIn_Empty = '1' and gpuGp0DreqStagedMultiple = '0') or
        (fifoIn_AtMostOne = '1' and gpuGp0DreqStagedEmpty = '1') else '0';
 
+   -- The SDRAM2 GPU uses a physical FIFO and separate staged header/argument
+   -- registers (rather than the original fifoIn_Pending counter). Recognize a
+   -- lone queued polygon/line header before it reaches the command decoder.
+   cmdQueued_dreqHold <= '1' when
+       (fifoIn_AtMostOne = '1' and fifoIn_Empty = '0' and
+        gpuGp0DreqStagedEmpty = '1' and proc_requestFifo = '0' and
+        (fifoIn_lastWrClass = "001" or fifoIn_lastWrClass = "010") and
+        (proc_idle = '1' or proc_cmdClass = "001" or
+         proc_cmdClass = "010" or proc_cmdClass = "011")) else '0';
+
+   -- A header already popped into the SDRAM2 command stage must also keep
+   -- DMA paused until the command decoder sees it.
+   cmdHeader_dreqHold <= '1' when
+       (gp0HeaderPending = '1' and proc_idle = '1' and
+        (fifoIn_RawDout(31 downto 29) = "001" or
+         fifoIn_RawDout(31 downto 29) = "010")) else '0';
+
+   -- A line missing GP0 parameters must not let DMA fetch the following block.
+   cmdDreqHold <= line_requestFifo or cmdQueued_dreqHold or cmdHeader_dreqHold;
+
+   process(clk2x)
+   begin
+      if rising_edge(clk2x) then
+         if reset = '1' or softReset = '1' or SS_reset = '1' or fifoIn_reset = '1' then
+            fifoIn_lastWrClass <= "000";
+         elsif fifoIn_Wr = '1' and (fifoIn_Full = '0' or fifoIn_Rd = '1') then
+            fifoIn_lastWrClass <= fifoIn_Din(31 downto 29);
+         end if;
+      end if;
+   end process;
+
    process(clk2x)
    begin
       if rising_edge(clk2x) then
          if reset = '1' or softReset = '1' or SS_reset = '1' or fifoIn_reset = '1' then
             gpuGp0DreqReady <= '0';
          elsif ce = '1' then
-            gpuGp0DreqReady <= gpuGp0DreqQueueReady;
+            gpuGp0DreqReady <= gpuGp0DreqQueueReady and not cmdDreqHold;
          end if;
       end if;
    end process;
@@ -1208,6 +1246,7 @@ begin
          if (reset = '1') then
          
             proc_idle <= '1';
+            proc_cmdClass <= "000";
             
             textureWindow           <= unsigned(ss_gpu_in(2)(19 downto 0));   
             
@@ -1271,6 +1310,7 @@ begin
                   
                   proc_idle           <= '0';
                   GPUSTAT_ReadyRecCmd <= '0';
+                  proc_cmdClass       <= fifoIn_Dout(31 downto 29);
 
                   if (cmdNew(7 downto 5) = "001" or cmdNew(7 downto 5) = "010") then
                      GPUSTAT_WFEPBlocked <= '1';
@@ -1350,6 +1390,7 @@ begin
             
             if (softReset = '1') then
                proc_idle              <= '1';
+               proc_cmdClass          <= "000";
                procRetirePending      <= '0';
                drawMode               <= (others => '0');
                GPUSTAT_TextPageX      <= "0000";
@@ -1555,6 +1596,7 @@ begin
       ce                   => ce,
       gpuLogicCe           => gpuLogicCe,        
       reset                => softreset or SS_reset,
+      drawer_reset         => drawer_reset,
 
       REPRODUCIBLEGPUTIMING=> REPRODUCIBLEGPUTIMING,
 
@@ -2080,6 +2122,8 @@ begin
    -- vram access
    process (clk2x)
       variable reqVRAMSizeRounded : unsigned(10 downto 0);
+	  variable reqVRAMWordsTotal  : unsigned(8 downto 0);
+      variable reqVRAMWordsFirst  : unsigned(8 downto 0);
       variable readEndPlus3       : unsigned(11 downto 0);
    begin
       if rising_edge(clk2x) then
@@ -2173,6 +2217,24 @@ begin
                             (logicalReqOwner = VRAMOWN_CPU2V or logicalReqOwner = VRAMOWN_V2V or logicalReqOwner = VRAMOWN_V2C)) then
                            if (reqVRAMXPos + reqVRAMSizeRounded > 1024) then
                               reqVRAMwrap <= resize(((reqVRAMXPos + reqVRAMSizeRounded) - 1024) / 4, 8);
+                           end if;
+                        end if;
+						if (videoout_reqVRAMEnable = '1') then
+                           reqVRAMWordsTotal := reqVRAMSizeRounded(10 downto 2);
+                           reqVRAMWordsFirst := to_unsigned(256, 9) - resize(reqVRAMXPos(9 downto 2), 9);
+                           if (reqVRAMWordsTotal > reqVRAMWordsFirst) then
+                              reqVRAMwrap <= resize(reqVRAMWordsTotal - reqVRAMWordsFirst, 8);
+                              if (reqVRAMWordsFirst > 128) then
+                                 vram_BURSTCNT  <= x"80";
+                                 reqVRAMremain  <= x"80" - 1;
+                                 reqVRAMremain2 <= x"80" - 1;
+                                 reqVRAMnext    <= resize(reqVRAMWordsFirst - 128, 8);
+                              else
+                                 vram_BURSTCNT  <= std_logic_vector(reqVRAMWordsFirst(7 downto 0));
+                                 reqVRAMremain  <= reqVRAMWordsFirst(7 downto 0) - 1;
+                                 reqVRAMremain2 <= reqVRAMWordsFirst(7 downto 0) - 1;
+                                 reqVRAMnext    <= (others => '0');
+                              end if;
                            end if;
                         end if;
                      elsif (logicalWriteValid = '1') then

@@ -423,6 +423,7 @@ architecture arch of psx_top is
    
    -- Memory mux
    signal memMuxIdle             : std_logic;
+   signal memMuxBusFree          : std_logic;
    
    signal mem_request            : std_logic;
    signal mem_rnw                : std_logic; 
@@ -485,6 +486,7 @@ architecture arch of psx_top is
    signal dmaOn                  : std_logic;
    signal dmaCpuWindow           : std_logic;
    signal dmaRequest             : std_logic;
+   signal dmaPrioRequest         : std_logic;
    signal dmaStallCPU            : std_logic;
    signal canDMA                 : std_logic;
    signal ignoreDMACDTiming      : std_logic;
@@ -754,7 +756,8 @@ begin
    Pause_Idle <= SS_Idle_gpu and SS_Idle_mdec and Pause_idle_cd and SS_idle_spu and SS_idle_pad and SS_idle_irq and SS_idle_cpu and SS_idle_gte and SS_idle_dma; 
    
    -- ce generation
-   canDMA <= memMuxIdle;
+   -- GPU block uploads bypass queued CPU writes only when the bus is free.
+   canDMA <= memMuxIdle or (dmaPrioRequest and memMuxBusFree);
    
    isPaused <= pausing;
    
@@ -1264,6 +1267,7 @@ begin
       canDMA               => canDMA,
       cpuPaused            => cpuPaused,
       dmaRequest           => dmaRequest,
+      dmaPrioRequest       => dmaPrioRequest,
       dmaStallCPU          => dmaStallCPU,
       dmaOn                => dmaOn,
       dmaCpuWindow         => dmaCpuWindow,
@@ -1729,8 +1733,9 @@ begin
       ce                   => ce,   
       reset                => reset_intern,
       
-      pauseNext            => cpuPaused or (dmaRequest and canDMA),
+      pauseNext            => cpuPaused or (dmaRequest and canDMA) or dmaPrioRequest,
       isIdle               => memMuxIdle,
+      isBusFree            => memMuxBusFree,
          
       loadExe              => loadExe,
       exe_initial_pc       => exe_initial_pc,  

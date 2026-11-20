@@ -25,6 +25,7 @@ entity dma is
       canDMA               : in  std_logic;
       cpuPaused            : in  std_logic;
       dmaRequest           : out std_logic;
+      dmaPrioRequest       : out std_logic;
       dmaStallCPU          : out std_logic;
       dmaOn                : out std_logic;
       dmaCpuWindow         : out std_logic;
@@ -201,6 +202,11 @@ architecture arch of dma is
 begin 
 
    toDevice <= dmaSettings.D_CHCR(0);
+
+   -- GPU block DMA RAM->GPU may start even while CPU writes are still queued.
+   dmaPrioRequest <= '1' when (dmaRequest = '1' and triggerchannel = 2 and
+                              dmaArray(2).D_CHCR(10 downto 9) = "01" and
+                              dmaArray(2).D_CHCR(0) = '1') else '0';
 
    ram_cnt <= "00" when (toDevice = '1' and dmaState /= OFF and
                          dmaSettings.D_CHCR(10 downto 9) = "00" and

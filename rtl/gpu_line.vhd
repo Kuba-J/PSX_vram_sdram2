@@ -13,6 +13,7 @@ entity gpu_line is
       ce                   : in  std_logic;
       gpuLogicCe           : in  std_logic;
       reset                : in  std_logic;
+      drawer_reset         : in  std_logic;
       
       REPRODUCIBLEGPUTIMING: in  std_logic;
       
@@ -152,8 +153,6 @@ architecture arch of gpu_line is
    signal pixelCnt            : unsigned(9 downto 0) := (others => '0');
    
    signal firstPixel          : std_logic;
-   
-   signal timeout             : integer range 0 to 1048575 := 0;
 
    signal divResponsePending  : std_logic := '0';
    signal readDonePending     : std_logic := '0';
@@ -199,16 +198,8 @@ begin
                drawTiming <= drawTiming + 1;
             end if;
             
+            -- An incomplete GP0 line must wait for missing arguments without timing out.
             error <= '0';
-            if (recstate = REQUESTIDLE) then
-               timeout <= 0;
-            elsif (timeout < 1048575) then
-               timeout  <= timeout + 1;
-            else
-               error    <= '1';
-               recstate <= REQUESTIDLE;
-               done     <= '1';
-            end if;
             
             if (fifoLine_Full = '1') then
                error <= '1';
@@ -295,6 +286,14 @@ begin
                   end if;
                        
             end case;
+
+            -- GP1(01h) cancels a pending, incomplete line command.
+            if (drawer_reset = '1' and
+                (recstate = REQUESTPOS1 or recstate = REQUESTCOLOR2 or recstate = REQUESTPOS2)) then
+               recstate    <= REQUESTWAITDONE;
+               fifoLine_Wr <= '0';
+               swap12      <= '0';
+            end if;
          
          end if;
          
