@@ -589,13 +589,19 @@ function automatic [21:0] map_gpu_word_addr(input [27:0] a);
    begin
       case (a[27:20])
          8'h00: region = 3'd0;
-         8'h04: region = 3'd1;
+         // Keep the Render24 extension in a disjoint SDRAM region.
+         // Its 2 KiB offset places corresponding base/extension pixels
+         // in different physical banks, avoiding row thrashing on every
+         // two-plane write. The offset is linear across burst boundaries.
+         8'h04: region = 3'd6;
          8'h05: region = 3'd2;
          8'h06: region = 3'd3;
          8'h07: region = 3'd4;
          default: region = 3'd5;
       endcase
       byte_off = {region,20'b0} + {3'b000,a[19:0]};
+      if (a[27:20] == 8'h04)
+         byte_off = byte_off + 23'd2048;
       map_gpu_word_addr = byte_off[22:1];
    end
 endfunction
