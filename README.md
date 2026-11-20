@@ -46,3 +46,4 @@ PSX_DualSDRAM.qpf
   entries on the debug page have no effect. Normal video output over HDMI and
   analog is unaffected.
 * **The 480i to 480p hack and the GPU Slowdown option have been removed.**
+* **Disabled Texture Filtering by default to reduce FPGA resource usage.**
