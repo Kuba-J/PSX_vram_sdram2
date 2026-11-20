@@ -216,6 +216,7 @@ architecture arch of gpu is
    attribute keep of logicalWriteOwner     : signal is true;
   
    signal softReset                 : std_logic := '0';
+   signal softResetPal              : std_logic := '0'; -- PAL bit to use on soft reset
    signal drawer_reset              : std_logic := '0';
    
    signal videoout_settings         : tvideoout_settings;
@@ -884,7 +885,8 @@ begin
          if (reset = '1') then
                
             softReset               <= not loading_savestate;
-            busReadStall           <= '0';
+			softResetPal            <= isPal; -- start in console region, normally BIOS does it but not with fastboot
+            busReadStall            <= '0';
             
             fifoIn_reset            <= '1';
             fifoOut_reset           <= '1';
@@ -949,6 +951,7 @@ begin
                   case (to_integer(unsigned(bus_dataWrite(29 downto 24)))) is
                      when 16#00# => -- reset
                         softReset    <= '1';
+						softResetPal <= '0'; -- psx-spx: GP1(00h) always goes to NTSC, The Next Tetris PAL fix
                         fifoIn_reset <= '1'; 
                         
                      when 16#01# => -- clear fifo
@@ -1046,7 +1049,7 @@ begin
                GPUSTAT_HorRes2        <= '0';
                GPUSTAT_HorRes1        <= "00";
                GPUSTAT_VerRes         <= '0';
-               GPUSTAT_PalVideoMode   <= isPal;
+               GPUSTAT_PalVideoMode   <= softResetPal;
                GPUSTAT_ColorDepth24   <= '0';
                GPUSTAT_VertInterlace  <= '0';
                GPUSTAT_DisplayDisable <= '1';
