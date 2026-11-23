@@ -2219,7 +2219,8 @@ begin
                               reqVRAMwrap <= resize(((reqVRAMXPos + reqVRAMSizeRounded) - 1024) / 4, 8);
                            end if;
                         end if;
-						if (videoout_reqVRAMEnable = '1') then
+						if (videoout_reqVRAMEnable = '1' or
+                            (logicalReqOwner /= VRAMOWN_CPU2V and logicalReqOwner /= VRAMOWN_V2V and logicalReqOwner /= VRAMOWN_V2C)) then
                            reqVRAMWordsTotal := reqVRAMSizeRounded(10 downto 2);
                            reqVRAMWordsFirst := to_unsigned(256, 9) - resize(reqVRAMXPos(9 downto 2), 9);
                            if (reqVRAMWordsTotal > reqVRAMWordsFirst) then
